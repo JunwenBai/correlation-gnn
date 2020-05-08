@@ -16,10 +16,8 @@ def encode_onehot(labels):
 def load_jj_data(path):
     adj = np.load(path+"/A.npy").astype(float)
     sp_adj = sp.coo_matrix(adj)
-    #sp_adj = normalize(sp_adj + sp.eye(sp_adj.shape[0]))
     sp_adj = normalize(sp_adj)
     features = np.load(path+"/feats.npy")
-    #features = normalize(features)
 
     labels = np.load(path+"/labels.npy")
     idx_train = np.load(path+"/train_idx.npy")-1
@@ -35,9 +33,6 @@ def load_data(path="../data/cora/", dataset="cora"):
                                         dtype=np.dtype(str))
     features = sp.csr_matrix(idx_features_labels[:, 1:-1], dtype=np.float32)
     labels = encode_onehot(idx_features_labels[:, -1])
-
-    #print("features:", features.shape)
-    #print("labels:", labels.shape)
 
     # build graph
     idx = np.array(idx_features_labels[:, 0], dtype=np.int32)
@@ -96,13 +91,6 @@ def accuracy(output, labels):
 def sparse_mx_to_torch_sparse_tensor(sparse_mx):
     """Convert a scipy sparse matrix to a torch sparse tensor."""
     sparse_mx = sparse_mx.tocoo().astype(np.float32)
-    '''
-    print(sparse_mx.row.shape)
-    print(sparse_mx.col.shape)
-    print(sparse_mx.data.shape)
-    print(np.vstack((sparse_mx.row, sparse_mx.col)).shape)
-    exit()
-    '''
     indices = torch.from_numpy(
         np.vstack((sparse_mx.row, sparse_mx.col)).astype(np.int64))
     values = torch.from_numpy(sparse_mx.data)
@@ -113,12 +101,6 @@ def get_Gamma(alpha, beta, S):
     return beta * torch.eye(S.size(0)) - beta * alpha * S
 
 def interpolate(idx_train, idx_test, res_pred_train, Gamma):
-    '''
-    print("Gamma:", Gamma[idx_test, :][:, idx_test].shape)
-    print("Gamma_sub:", Gamma[idx_test, :][:, idx_train].shape)
-    print("matmul:", res_pred_train.shape)
-    '''
-
     idx_train = idx_train.cpu().detach().numpy()
     idx_test = idx_test.cpu().detach().numpy()
     idx = np.arange(Gamma.shape[0])
@@ -130,22 +112,12 @@ def interpolate(idx_train, idx_test, res_pred_train, Gamma):
     return res_pred_test[:len(idx_test)]
 
 def lp_refine(idx_test, idx_train, labels, output, S, alpha=1., beta=1.):
-    #S = sparse_mx_to_torch_sparse_tensor(normalize(adj))
-    #print("S:", type(S), S.shape)
     Gamma = get_Gamma(alpha, beta, S)
 
     pred_train = output[idx_train]
     pred_test = output[idx_test]
     res_pred_train = labels[idx_train] - output[idx_train]
-    '''
-    print(S)
-    print("pred_train:", pred_train.shape)
-    print("pred_test:", pred_test.shape)
-    print("labels:", labels.shape)
-    print("output:", output.shape)
-    print("res_pred_train:", res_pred_train.shape)
-    exit()
-    '''
+    
     refined_test = pred_test + interpolate(idx_train, idx_test, res_pred_train, Gamma)
 
     return refined_test
