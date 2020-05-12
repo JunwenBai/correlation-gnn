@@ -8,6 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torch.multiprocessing as mp
+from torch.autograd import Variable
 from torch.utils.data import DataLoader
 import dgl.function as fn
 import dgl.nn.pytorch as dglnn
@@ -21,6 +22,9 @@ import traceback
 import scipy.sparse as sp
 from sklearn.metrics import r2_score
 from utils import lp_refine, R2, sparse_mx_to_torch_sparse_tensor, normalize
+from gpytorch import inv_matmul, logdet
+from gpytorch.utils import linear_cg
+from torch import matmul
 
 #### Neighbor sampler
 
@@ -125,9 +129,9 @@ def prepare_mp(g):
     g.out_degree(0)
     g.find_edges([0])
 
-def compute_acc(pred, labels):
+def compute_r2(pred, labels):
     """
-    Compute the accuracy of prediction given the labels.
+    Compute the R2 of prediction given the labels.
     """
     #return (th.argmax(pred, dim=1) == labels).float().sum() / len(pred)
     return r2_score(labels.cpu().detach().numpy(), pred.cpu().detach().numpy())
@@ -138,7 +142,7 @@ def evaluate(model, g, inputs, labels, val_mask, batch_size, device):
     g : The entire graph.
     inputs : The features of all the nodes.
     labels : The labels of all the nodes.
-    val_mask : A 0-1 mask indicating which nodes do we actually compute the accuracy for.
+    val_mask : A 0-1 mask indicating which nodes do we actually compute the R2 for.
     batch_size : Number of nodes to compute at the same time.
     device : The GPU device to evaluate on.
     """
@@ -146,9 +150,9 @@ def evaluate(model, g, inputs, labels, val_mask, batch_size, device):
     with th.no_grad():
         pred = model.inference(g, inputs, batch_size, device)
     model.train()
-    return compute_acc(pred[val_mask], labels[val_mask])
+    return compute_r2(pred[val_mask], labels[val_mask])
 
-def evaluate_test(model, g, inputs, labels, test_mask, batch_size, device, lp_dict, meta):
+def evaluate_test(model, g, inputs, labels, test_mask, batch_size, device, lp_dict, coeffs, meta):
     model.eval()
     with th.no_grad():
         pred = model.inference(g, inputs, batch_size, device).view(-1)
@@ -157,13 +161,13 @@ def evaluate_test(model, g, inputs, labels, test_mask, batch_size, device, lp_di
     labels = labels.cuda()
     idx_test = lp_dict['idx_test']
     idx_train = lp_dict['idx_train']
-    adj = sparse_mx_to_torch_sparse_tensor(normalize(lp_dict['sp_adj']))
+    adj = lp_dict['adj']
 
     labels, output, adj = labels.cpu(), output.cpu(), adj.cpu()
     loss = F.mse_loss(output[idx_test].squeeze(), labels[idx_test].squeeze())
-    r2_test = compute_acc(output[test_mask], labels[test_mask])
-    lp_output = lp_refine(idx_test, idx_train, labels, output, adj)
-    lp_r2_test = compute_acc(lp_output, labels[idx_test])
+    r2_test = compute_r2(output[test_mask], labels[test_mask])
+    lp_output = lp_refine(idx_test, idx_train, labels, output, adj, torch.tanh(coeffs[0]).item(), torch.exp(coeffs[1]).item())
+    lp_r2_test = compute_r2(lp_output, labels[idx_test])
 
     print("------------")
     print("election year {}".format(meta))
@@ -174,6 +178,8 @@ def evaluate_test(model, g, inputs, labels, test_mask, batch_size, device, lp_di
 
     model.train()
 
+    return lp_r2_test
+
 def load_subtensor(g, labels, seeds, input_nodes, device):
     """
     Copys features and labels of a set of nodes onto GPU.
@@ -181,6 +187,23 @@ def load_subtensor(g, labels, seeds, input_nodes, device):
     batch_inputs = g.ndata['features'][input_nodes].to(device)
     batch_labels = labels[seeds].to(device)
     return batch_inputs, batch_labels
+
+def setdiff(n, idx):
+    idx = idx.cpu().detach().numpy()
+    cp_idx = np.setdiff1d(np.arange(n), idx)
+    return cp_idx
+
+def loss_fcn(output, labels, idx, S, coeffs, device, add_logdet):
+    rL = labels - output
+    S = S.to_dense()
+    Gamma = (torch.eye(S.size(0)).to(device) - torch.tanh(coeffs[0]) * S.to(device)) * torch.exp(coeffs[1])
+    cp_idx = setdiff(len(S), idx)
+
+    loss1 = rL.dot(matmul(Gamma[idx, :][:, idx], rL) - matmul(Gamma[idx, :][:, cp_idx], inv_matmul(Gamma[cp_idx, :][:, cp_idx], matmul(Gamma[cp_idx, :][:, idx], rL))))
+    loss2 = 0.
+    if add_logdet: loss2 = logdet(Gamma) - logdet(Gamma[cp_idx, :][:, cp_idx])
+    l = loss1 - loss2
+    return l/len(idx)
 
 #### Entry point
 def run(args, device, data):
@@ -208,13 +231,15 @@ def run(args, device, data):
     # Define model and optimizer
     model = SAGE(in_feats, args.num_hidden, n_classes, args.num_layers, F.relu, args.dropout)
     model = model.to(device)
-    loss_fcn = nn.MSELoss()
-    loss_fcn = loss_fcn.to(device)
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
+
+    coeffs = Variable(torch.FloatTensor([1., 3.0]).to(device) , requires_grad=True)
+    coeffs_optimizer = optim.SGD([coeffs], lr=1e-1, momentum=0.0)
 
     # Training loop
     avg = 0
     iter_tput = []
+    steps_per_epoch = len(dataloader)
     for epoch in range(args.num_epochs):
         tic = time.time()
 
@@ -230,31 +255,39 @@ def run(args, device, data):
 
             # Load the input features as well as output labels
             batch_inputs, batch_labels = load_subtensor(g, labels, seeds, input_nodes, device)
-
             # Compute loss and prediction
+            model.train()
             batch_pred = model(blocks, batch_inputs)
-            loss = loss_fcn(batch_pred.squeeze(), batch_labels.squeeze())
+            loss = loss_fcn(batch_pred.squeeze(), batch_labels.squeeze(), seeds, lp_dict['adj'], coeffs, device, False)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
+            if (step+1) % (steps_per_epoch//2) == 0:
+                model.train()
+                batch_pred = model(blocks, batch_inputs)
+                loss = loss_fcn(batch_pred.squeeze(), batch_labels.squeeze(), seeds, lp_dict['adj'], coeffs, device, True)
+                coeffs_optimizer.zero_grad()
+                loss.backward()
+                coeffs_optimizer.step()
+
             iter_tput.append(len(seeds) / (time.time() - tic_step))
             if step % args.log_every == 0:
-                acc = compute_acc(batch_pred, batch_labels)
+                r2 = compute_r2(batch_pred, batch_labels)
                 gpu_mem_alloc = th.cuda.max_memory_allocated() / 1000000 if th.cuda.is_available() else 0
-                print('Epoch {:05d} | Step {:05d} | Loss {:.4f} | Train R2 {:.4f} | Speed (samples/sec) {:.4f} | GPU {:.1f} MiB'.format(
-                    epoch, step, loss.item(), acc.item(), np.mean(iter_tput[3:]), gpu_mem_alloc))
+                #print('Epoch {:05d} | Step {:05d} | Loss {:.4f} | Train R2 {:.4f} | Speed (samples/sec) {:.4f} | GPU {:.1f} MiB'.format(epoch, step, loss.item(), r2.item(), np.mean(iter_tput[3:]), gpu_mem_alloc))
+                print('Epoch {:05d} | Step {:05d} | Loss {:.4f} | Train R2 {:.4f} | alpha: {:.4f} | beta: {:.4f}'.format(epoch, step, loss.item(), r2.item(), th.tanh(coeffs[0]).item(), th.exp(coeffs[1]).item()))
 
         toc = time.time()
         print('Epoch Time(s): {:.4f}'.format(toc - tic))
         if epoch >= 5:
             avg += toc - tic
         if epoch % args.eval_every == 0 and epoch != 0:
-            eval_acc = evaluate(model, g, g.ndata['features'], labels, val_mask, args.batch_size, device)
-            print('Eval R2: {:.4f}'.format(eval_acc))
+            eval_r2 = evaluate(model, g, g.ndata['features'], labels, val_mask, args.batch_size, device)
+            print('Eval R2: {:.4f}'.format(eval_r2))
             
-    evaluate_test(model, g, g.ndata['features'], labels, test_mask, args.batch_size, device, lp_dict, "2012")
-    evaluate_test(model, ind_g, ind_g.ndata['features'], ind_labels, test_mask, args.batch_size, device, lp_dict, "2016")
+    evaluate_test(model, g, g.ndata['features'], labels, test_mask, args.batch_size, device, lp_dict, coeffs, "2012")
+    evaluate_test(model, ind_g, ind_g.ndata['features'], ind_labels, test_mask, args.batch_size, device, lp_dict, coeffs, "2016")
 
     print('Avg epoch time: {}'.format(avg / (epoch - 4)))
 
@@ -263,8 +296,9 @@ if __name__ == '__main__':
     argparser.add_argument('--gpu', type=int, default=0,
         help="GPU device ID. Use -1 for CPU training")
     argparser.add_argument('--num-epochs', type=int, default=500)
-    argparser.add_argument('--num-hidden', type=int, default=16)
+    argparser.add_argument('--num-hidden', type=int, default=32)
     argparser.add_argument('--num-layers', type=int, default=2)
+    argparser.add_argument('--seed', type=int, default=19940423)
     argparser.add_argument('--fan-out', type=str, default='25,25')
     argparser.add_argument('--batch-size', type=int, default=128)
     argparser.add_argument('--log-every', type=int, default=20)
@@ -275,8 +309,11 @@ if __name__ == '__main__':
         help="Number of sampling processes. Use 0 for no extra process.")
     args = argparser.parse_args()
     
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
     if args.gpu >= 0:
         device = th.device('cuda:%d' % args.gpu)
+        torch.cuda.manual_seed(args.seed)
     else:
         device = th.device('cpu')
 
@@ -302,7 +339,7 @@ if __name__ == '__main__':
     g = dgl.graph((th.LongTensor(sp_adj.row), th.LongTensor(sp_adj.col)))
     g.ndata['features'] = th.FloatTensor(features)
     prepare_mp(g)
-    lp_dict = {'idx_test': th.LongTensor(idx_test), 'idx_train': th.LongTensor(idx_train), 'sp_adj': sp_adj.astype(float)}
+    lp_dict = {'idx_test': th.LongTensor(idx_test), 'idx_train': th.LongTensor(idx_train), 'adj': sparse_mx_to_torch_sparse_tensor(normalize(sp_adj.astype(float)))}
 
     ind_path = './data/county/election/2016'
     ind_features = np.load(ind_path+"/feats.npy")

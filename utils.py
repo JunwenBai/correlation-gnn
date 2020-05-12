@@ -13,17 +13,18 @@ def encode_onehot(labels):
                              dtype=np.int32)
     return labels_onehot
 
-def load_jj_data(path):
+def load_jj_data(path, load_partial=False):
+    features = np.load(path+"/feats.npy")
+    labels = np.load(path+"/labels.npy")
+    if load_partial:
+        return None, torch.FloatTensor(features), torch.FloatTensor(labels), None, None, None
     adj = np.load(path+"/A.npy").astype(float)
     sp_adj = sp.coo_matrix(adj)
     sp_adj = normalize(sp_adj)
-    features = np.load(path+"/feats.npy")
-
-    labels = np.load(path+"/labels.npy")
     idx_train = np.load(path+"/train_idx.npy")-1
     idx_val = np.load(path+"/val_idx.npy")-1
     idx_test = np.load(path+"/test_idx.npy")-1
-    return adj, sparse_mx_to_torch_sparse_tensor(sp_adj), torch.FloatTensor(features), torch.FloatTensor(labels), torch.LongTensor(idx_train), torch.LongTensor(idx_val), torch.LongTensor(idx_test)
+    return sparse_mx_to_torch_sparse_tensor(sp_adj), torch.FloatTensor(features), torch.FloatTensor(labels), torch.LongTensor(idx_train), torch.LongTensor(idx_val), torch.LongTensor(idx_test)
 
 def load_data(path="../data/cora/", dataset="cora"):
     """Load citation network dataset (cora only for now)"""

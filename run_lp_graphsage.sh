@@ -1,1 +1,1 @@
-python graphsage/train_lp_graphsage.py
+python graphsage/train_lpgnn.py
