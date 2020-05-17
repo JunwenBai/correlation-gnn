@@ -31,22 +31,22 @@ We so far implemented 2 graph neural network structures: GCN and GraphSAGE, for 
 
 To train and test GCN-based LP-GNN, use the following script:
 ```bash
-./run_lp_gcn.sh
+scripts/run_lp_gcn.sh
 ```
 To train and test GraphSAGE-based LP-GNN, use the following script:
 ```bash
-./run_lp_graphsage.sh
+scripts/run_lp_graphsage.sh
 ```
 To train and test GCN-based C-GNN, use the following script:
 
 ```bash
-./run_cgnn_gcn.sh
+scripts/run_cgnn_gcn.sh
 ```
 
 To train and test GraphSAGE-based C-GNN, use the following script:
 
 ```bash
-./run_cgnn_graphsage.sh
+scripts/run_cgnn_graphsage.sh
 ```
 
 The default hyper-parameters should give reasonably good results.
