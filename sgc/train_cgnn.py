@@ -49,15 +49,19 @@ def evaluate_test(model, g, inputs, labels, test_mask, lp_dict, coeffs, meta):
     labels, output, adj = labels.cpu(), output.cpu(), adj.cpu()
     loss = F.mse_loss(output[idx_test].squeeze(), labels[idx_test].squeeze())
     r2_test = compute_r2(output[idx_test], labels[idx_test])
-    lp_output = lp_refine(idx_test, idx_train, labels, output, adj)
+    lp_output = lp_refine(idx_test, idx_train, labels, output, adj, torch.tanh(coeffs[0]).item(), torch.exp(coeffs[1]).item())
     lp_r2_test = compute_r2(lp_output, labels[idx_test])
+    lp_output_raw_cov = lp_refine(idx_test, idx_train, labels, output, adj)
+    lp_r2_test_raw_cov = compute_r2(lp_output_raw_cov, labels[idx_test])
 
     print("------------")
     print("election year {}".format(meta))
     print("loss:", loss.item())
     print("raw_r2:", r2_test)
     print("refined_r2:", lp_r2_test)
+    print("refined_r2_raw_cov:", lp_r2_test_raw_cov)
     print("------------")
+
 
 def load_cls_data(args):
     data = load_data(args)

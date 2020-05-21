@@ -153,8 +153,8 @@ def evaluate_test(model, g, inputs, labels, test_mask, batch_size, device, lp_di
     with th.no_grad():
         pred = model.inference(g, inputs, batch_size, device).view(-1)
 
-    output = pred.cuda()
-    labels = labels.cuda()
+    output = pred.to(device)
+    labels = labels.to(device)
     idx_test = lp_dict['idx_test']
     idx_train = lp_dict['idx_train']
     adj = sparse_mx_to_torch_sparse_tensor(normalize(lp_dict['sp_adj']))

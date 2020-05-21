@@ -54,14 +54,17 @@ def evaluate_test(model, features, labels, test_mask, lp_dict, coeffs, meta="201
     labels, output, adj = labels.cpu(), output.cpu(), adj.cpu()
     loss = F.mse_loss(output[idx_test].squeeze(), labels[idx_test].squeeze())
     r2_test = compute_r2(output[idx_test], labels[idx_test])
-    lp_output = lp_refine(idx_test, idx_train, labels, output, adj)
+    lp_output = lp_refine(idx_test, idx_train, labels, output, adj, torch.tanh(coeffs[0]).item(), torch.exp(coeffs[1]).item())
     lp_r2_test = compute_r2(lp_output, labels[idx_test])
+    lp_output_raw_conv = lp_refine(idx_test, idx_train, labels, output, adj)
+    lp_r2_test_raw_conv = compute_r2(lp_output_raw_conv, labels[idx_test])
 
     print("------------")
     print("election year {}".format(meta))
     print("loss:", loss.item())
     print("raw_r2:", r2_test)
     print("refined_r2:", lp_r2_test)
+    print("refined_r2_raw_conv:", lp_r2_test_raw_conv)
     print("------------")
 
 
@@ -259,6 +262,8 @@ if __name__ == '__main__':
                         help="number of hidden layers")
     parser.add_argument("--num-hidden", type=int, default=32,
                         help="number of hidden units")
+    parser.add_argument("--seed", type=int, default=19940423,
+                        help="random seed")
     parser.add_argument("--residual", action="store_true", default=False,
                         help="use residual connection")
     parser.add_argument("--in-drop", type=float, default=.6,
@@ -279,5 +284,9 @@ if __name__ == '__main__':
                         help="skip re-evaluate the validation set")
     args = parser.parse_args()
     print(args)
+
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed(args.seed)
 
     main(args)

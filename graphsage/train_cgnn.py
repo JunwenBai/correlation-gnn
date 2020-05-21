@@ -168,12 +168,15 @@ def evaluate_test(model, g, inputs, labels, test_mask, batch_size, device, lp_di
     r2_test = compute_r2(output[test_mask], labels[test_mask])
     lp_output = lp_refine(idx_test, idx_train, labels, output, adj, torch.tanh(coeffs[0]).item(), torch.exp(coeffs[1]).item())
     lp_r2_test = compute_r2(lp_output, labels[idx_test])
+    lp_output_raw_conv = lp_refine(idx_test, idx_train, labels, output, adj)
+    lp_r2_test_raw_conv = R2(lp_output_raw_conv, labels[idx_test])
 
     print("------------")
     print("election year {}".format(meta))
     print("loss:", loss.item())
     print("raw_r2:", r2_test)
     print("refined_r2:", lp_r2_test)
+    print("refined_r2_raw_conv:", lp_r2_test_raw_conv)
     print("------------")
 
     model.train()

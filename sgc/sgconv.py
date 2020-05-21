@@ -18,8 +18,9 @@ class SGConv(nn.Module):
         self._k = k
         self.norm = norm
         self.n_hid = n_hid
+        #self.fc1 = nn.Linear(in_feats, n_hid, bias=bias)
         self.fc1 = nn.Linear(in_feats, out_feats, bias=bias)
-        #self.fc2 = nn.Linear(n_hid, out_feats, bias=bias)
+        self.fc2 = nn.Linear(n_hid, out_feats, bias=bias)
         
         #self.reset_parameters()
 
@@ -57,6 +58,7 @@ class SGConv(nn.Module):
             # cache feature
             if self._cached:
                 self._cached_h = feat
-        #x = F.elu(feat)
         x = self.fc1(feat)
+        #x = self.fc1(F.elu(feat))
+        #x = self.fc2(F.elu(x))
         return x

@@ -117,7 +117,7 @@ def loss(output, labels, idx, S, coeffs, add_logdet):
     Gamma = (I - torch.tanh(coeffs[0])*S)*torch.exp(coeffs[1])
     cp_idx = setdiff(len(S), idx)
     loss1 = rL.dot(matmul(Gamma[idx, :][:, idx], rL) - matmul(Gamma[idx, :][:, cp_idx], inv_matmul(Gamma[cp_idx, :][:, cp_idx], matmul(Gamma[cp_idx, :][:, idx], rL))))
-    loss2 = torch.Tensor([0.]).cuda()
+    loss2 = torch.Tensor([0.]).cuda() if args.cuda else torch.Tensor([0.])
     if add_logdet: loss2 = logdet(Gamma) - logdet(Gamma[cp_idx, :][:, cp_idx])
     l = loss1 - loss2
 
@@ -173,10 +173,13 @@ def test(adj, features, labels, test_meta):
     labels, output, adj = labels.cpu(), output.cpu(), adj.cpu()
     lp_output = lp_refine(idx_test, idx_train, labels, output, adj, torch.tanh(coeffs[0]).item(), torch.exp(coeffs[1]).item())
     lp_r2_test = R2(lp_output, labels[idx_test])
+    lp_output_raw_conv = lp_refine(idx_test, idx_train, labels, output, adj)
+    lp_r2_test_raw_conv = R2(lp_output_raw_conv, labels[idx_test])
     print("Test set ({}) results:".format(test_meta),
           "loss= {:.4f}".format(loss_test.item()),
           "R2= {:.4f}".format(r2_test.item()),
-          "LP_R2= {:.4f}\n".format(lp_r2_test.item()))
+          "LP_R2= {:.4f}".format(lp_r2_test.item()),
+          "LP_R2_raw_conv= {:.4f}\n".format(lp_r2_test_raw_conv.item()))
 
 
 # Train model
